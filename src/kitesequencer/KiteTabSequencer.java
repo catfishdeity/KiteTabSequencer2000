@@ -6,7 +6,6 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dialog.ModalityType;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
@@ -102,7 +101,7 @@ public class KiteTabSequencer {
 	
 	public static Font font = new Font("Monospaced",Font.BOLD,14);
 	public static FontMetrics fontMetrics = new Canvas().getFontMetrics(font);
-	
+	final double middleC = 220.0 * Math.pow(2d, 3.0/12.0);
 	public static int cellWidth = fontMetrics.stringWidth("88")+3;
 	public static int rowHeight = fontMetrics.getMaxAscent()+2;
 	
@@ -131,21 +130,31 @@ public class KiteTabSequencer {
 	
 	final ScheduledExecutorService playbackDaemon = Executors.newSingleThreadScheduledExecutor();
 	
-	Map<MidiChannel,Integer> activeBassNotes = new HashMap<>();
-	Map<MidiChannel,Integer> activeAcousticNotes = new HashMap<>();
-	Map<MidiChannel,Integer> activeGuitarNotes = new HashMap<>();
-	final Map<Integer,InputVal> openBassNotes = new ConcurrentHashMap<>();
-	final Map<Integer,InputVal> openAcousticNotes = new ConcurrentHashMap<>();
-	final Map<Integer,InputVal> openGuitarNotes = new ConcurrentHashMap<>();
+	//Map<MidiChannel,Integer> activeBassNotes = new HashMap<>();
+	//Map<MidiChannel,Integer> activeAcousticNotes = new HashMap<>();
+	//Map<MidiChannel,Integer> activeGuitarNotes = new HashMap<>();
+	//final Map<Integer,InputVal> openBassNotes = new ConcurrentHashMap<>();
+	//final Map<Integer,InputVal> openAcousticNotes = new ConcurrentHashMap<>();
+	//final Map<Integer,InputVal> openGuitarNotes = new ConcurrentHashMap<>();
 	final Map<Integer,DrumVal> openDrumNotes = new ConcurrentHashMap<>();
 	
 	final JFrame frame = new JFrame("Kite Tab Sequencer 2000");
 	LeftClickablePanelButton playButton, stopButton;
 	PlayStatusPanel playStatusPanel = new PlayStatusPanel();
+	
 	EventCanvas eventCanvas = new EventCanvas();
-	TabCanvas bassCanvas = new TabCanvas(6,"Bass");
-	TabCanvas acousticCanvas = new TabCanvas(6,"AcousticG");
-	TabCanvas guitarCanvas = new TabCanvas(7,"ElectricG");
+	
+	TabCanvas bassCanvas = new TabCanvas(6,"Bass",
+			IntStream.of(5,4,3,2,1,0).mapToDouble(i -> 
+			middleC * 0.25 * Math.pow(2,(i*13d)/41d)).toArray());
+	TabCanvas acousticCanvas = new TabCanvas(6,"AcousticG",
+			IntStream.of(6,5,4,3,2,1).mapToDouble(i -> 
+			middleC * 0.5 *Math.pow(2,(i*13d)/41d)).toArray());
+	
+	TabCanvas guitarCanvas = new TabCanvas(7,"ElectricG",
+			IntStream.of(6,5,4,3,2,1,0).mapToDouble(i -> 
+			middleC * 0.5 *Math.pow(2,(i*13d)/41d)).toArray());
+	
 	DrumTabCanvas drumCanvas = new DrumTabCanvas();
 	NavigationCanvas navigationBar = new NavigationCanvas();
 	AtomicReference<KiteTabCanvas<?>> selectedCanvas = new AtomicReference<>();
@@ -155,18 +164,6 @@ public class KiteTabSequencer {
 		
 	}
 	
-	final double middleC = 220.0 * Math.pow(2d, 3.0/12.0);
-	
-	final double[] bassNoteBaseFrequencies = 
-			IntStream.of(5,4,3,2,1,0).mapToDouble(i -> 
-				middleC * 0.25 * Math.pow(2,(i*13d)/41d)).toArray();
-	final double[] guitarNoteBaseFrequencies = 
-			IntStream.of(6,5,4,3,2,1,0).mapToDouble(i -> 
-				middleC * 0.5 *Math.pow(2,(i*13d)/41d)).toArray();
-	final double[] acousticNoteBaseFrequencies = 
-			IntStream.of(6,5,4,3,2,1).mapToDouble(i -> 
-				middleC * 0.5 *Math.pow(2,(i*13d)/41d)).toArray();
-	
 	void playbackDaemonFunction() {
 		//DO NOT CALL THIS ON MASTER THREAD
 		while (true) {
@@ -174,8 +171,10 @@ public class KiteTabSequencer {
 				continue;
 			}
 			else {
+				int t = playT.getAndIncrement();
 				Arrays.asList(eventCanvas,bassCanvas,guitarCanvas,acousticCanvas,drumCanvas).forEach(a->a.repaint());
-				eventCanvas.data.getOrDefault(playT.get(),Collections.emptyMap()).entrySet().forEach(entry -> {
+				
+				eventCanvas.data.getOrDefault(t,Collections.emptyMap()).entrySet().forEach(entry -> {
 					switch (entry.getValue().getType()) {
 					case NIL:
 						break;
@@ -189,81 +188,20 @@ public class KiteTabSequencer {
 					
 					}
 				}); 
-				Map<Integer, InputVal> bassMap = bassCanvas.data.getOrDefault(playT.get(), Collections.emptyMap());
-				for (int row = 0 ; row < bassCanvas.getRowCount(); row++) {
-										
-					InputVal inputVal = bassMap.getOrDefault(row, InputVal.NIL);
-					if (inputVal == InputVal.HOLD || inputVal == InputVal.VIB) {
-						//do nothing, midi event keeps going
-				 
-					} else {
-						
-						if (openBassNotes.containsKey(row)) {
-							//send close midi message													
-							openBassNotes.remove(row);
-							processGeneralTabCanvasEvent(row,null,bassNoteBaseFrequencies,bassCanvas,activeBassNotes);
-						
+				//Map<Integer, InputVal> bassMap = bassCanvas.data.getOrDefault(t, Collections.emptyMap());
+				for (TabCanvas canvas : new TabCanvas[] {bassCanvas,acousticCanvas,guitarCanvas}) {
+					for (int row = 0 ; row < canvas.getRowCount(); row++) {
+						InputVal inputVal = canvas.getValueAt(t,row).orElse(InputVal.NIL);
+						if (inputVal == InputVal.HOLD || inputVal == InputVal.VIB) {
+							//do nothing, midi event keeps going				 
+						} else if (inputVal == InputVal.NIL) {
+							canvas.noteOff(row);						
+						} else if (inputVal.getEdoSteps().isPresent()) {
+							canvas.noteOn(row,inputVal);							
+							}
 						}
-						if (inputVal.getEdoSteps().isPresent()) {
-							//send open midi message							
-							openBassNotes.put(row, inputVal);
-							processGeneralTabCanvasEvent(row,inputVal,bassNoteBaseFrequencies,bassCanvas,activeBassNotes);
-						
-						}
-					}
-					
 				}
-				Map<Integer, InputVal> acousticMap = acousticCanvas.data.getOrDefault(playT.get(), Collections.emptyMap());
-				for (int row = 0 ; row < acousticCanvas.getRowCount(); row++) {
-										
-					InputVal inputVal = acousticMap.getOrDefault(row, InputVal.NIL);
-					if (inputVal == InputVal.HOLD || inputVal == InputVal.VIB) {
-						//do nothing, midi event keeps going
-				 
-					} else {
-						
-						if (openAcousticNotes.containsKey(row)) {
-							//send close midi message
-							InputVal prevNote = openAcousticNotes.get(row);							
-							openAcousticNotes.remove(row);
-							processGeneralTabCanvasEvent(row,null,acousticNoteBaseFrequencies,acousticCanvas,activeAcousticNotes);
-							//processAcousticInput(row,null);
-						}
-						if (inputVal.getEdoSteps().isPresent()) {
-							//send open midi message							
-							openAcousticNotes.put(row, inputVal);
-							//processAcousticInput(row,inputVal);
-							processGeneralTabCanvasEvent(row,inputVal,acousticNoteBaseFrequencies,acousticCanvas,activeAcousticNotes);
-						}
-					}
-					
-				}
-				
-				Map<Integer, InputVal> guitarMap = guitarCanvas.data.getOrDefault(playT.get(), Collections.emptyMap());
-				for (int row = 0 ; row < guitarCanvas.getRowCount(); row++) {
-										
-					InputVal inputVal = guitarMap.getOrDefault(row, InputVal.NIL);
-					if (inputVal == InputVal.HOLD || inputVal == InputVal.VIB) {
-						//do nothing, midi event keeps going
-				 
-					} else {
-						
-						if (openGuitarNotes.containsKey(row)) {
-							//send close midi message
-							//InputVal prevNote = openGuitarNotes.get(row);
-							openGuitarNotes.remove(row);
-							
-							processGeneralTabCanvasEvent(row,null,guitarNoteBaseFrequencies,guitarCanvas,activeGuitarNotes);
-						}
-						if (inputVal.getEdoSteps().isPresent()) {
-							//send open midi message							
-							openGuitarNotes.put(row, inputVal);
-							//processGuitarInput(row,inputVal);
-							processGeneralTabCanvasEvent(row,inputVal,guitarNoteBaseFrequencies,guitarCanvas,activeGuitarNotes);
-						}
-					}
-					
-				}
+
 				Map<Integer, DrumVal> drumMap = drumCanvas.data.getOrDefault(playT.get(), Collections.emptyMap());
 				for (int row = 0; row < drumCanvas.getRowCount(); row++) {
 					DrumVal inputVal = drumMap.getOrDefault(row, DrumVal.NIL);
@@ -278,14 +216,12 @@ public class KiteTabSequencer {
 						processDrumInput(inputVal);
 					}
 				}
-
 				
 				long bpm = tempo.get();
 				Duration sixteenth = Duration.ofMinutes(1).dividedBy(bpm).dividedBy(4);  
 				playbackDaemon.schedule(()->playbackDaemonFunction(),
 						sixteenth.toMillis(),TimeUnit.MILLISECONDS);
 				playT.updateAndGet(i->i+1==repeatT.get()?stopT0.get():i+1);
-				//playT.incrementAndGet();
 				return;
 			}
 		}
@@ -404,7 +340,30 @@ public class KiteTabSequencer {
 	}
 	
 	public void handleNumericInput(int i) {
-		System.out.println(i);
+		if (selectedCanvas.get() == eventCanvas) {
+			
+		} else if (selectedCanvas.get() instanceof TabCanvas) {
+			TabCanvas canvas = (TabCanvas) selectedCanvas.get();
+			Optional<InputVal> inputValO = canvas.getSelectedValue();
+			if (inputValO.isPresent()) {
+				inputValO.flatMap(a->InputVal.lookup(a.getToken()+i))
+				.ifPresentOrElse(a->{
+					canvas.setSelectedValue(a);
+					canvas.repaint();
+				},()->{
+					InputVal.lookup(""+i).ifPresent(a -> {
+						canvas.setSelectedValue(a);
+						canvas.repaint();
+					});
+				});
+						
+			} else {
+				InputVal.lookup(""+i).ifPresent(a -> {
+					canvas.setSelectedValue(a);
+					canvas.repaint();
+				});
+			}
+		}
 	}
 	
 	public void handleABCInput(char c) {
@@ -415,16 +374,40 @@ public class KiteTabSequencer {
 				return;
 			case 'S':
 				addTempo();
+				return;
 			case 'N':
 				addStickyNote();
+				return;
 			default:
 				
 				break;
 			}
 
 		} else if (selectedCanvas.get() instanceof TabCanvas) {
+			TabCanvas canvas = (TabCanvas) selectedCanvas.get();
+			switch (c) {
+			case 'B':
+				canvas.setSelectedValue(InputVal._b);
+				canvas.repaint();
+				return;
+			case 'D':
+				canvas.setSelectedValue(InputVal._d);
+				canvas.repaint();
+				return;
+			case 'E':
+				canvas.setSelectedValue(InputVal._e);
+				canvas.repaint();
+				return;
+			}
 			
 		} else if (selectedCanvas.get() instanceof DrumTabCanvas) {
+			
+			DrumTabCanvas canvas = (DrumTabCanvas) selectedCanvas.get();
+			DrumVal.lookup(String.valueOf(c))
+			.ifPresent(val -> {
+				canvas.setSelectedValue(val);
+				canvas.repaint();
+			});
 			
 		}
 	}
@@ -1063,11 +1046,68 @@ public class KiteTabSequencer {
 	class TabCanvas extends KiteTabCanvas<InputVal> {		
 		
 		private final String name;
-				
+		private final double[] baseFrequencies;	
 		private final int rows;
-		public TabCanvas(int strings, String name) {
+		private final Map<Integer,InputVal> openNotes = new ConcurrentHashMap<>();
+		private final Map<MidiChannel,Integer> openMidiNums = new ConcurrentHashMap<>();
+		
+		public void noteOff(int row) {
+			openNotes.remove(row);
+			processTabCanvasEvent(row,null);
+		}
+		
+		public void noteOn(int row,InputVal inputVal) {
+			openNotes.put(row, inputVal);
+			processTabCanvasEvent(row,inputVal);
+		}
+		
+		void processTabCanvasEvent(int row,InputVal inputVal) {
+			MidiChannel channel = channelMappingMap.get(this).get(row).getChannel();
+			double[] stringTunings = this.getBaseFrequencies();
+			if (inputVal == null) {
+				if (openMidiNums.containsKey(channel)) {
+					channel.noteOff(openMidiNums.get(channel));
+					openMidiNums.remove(channel);
+				}			
+			}
+			else {
+				if (inputVal.getEdoSteps().isPresent()) {
+					
+					double baseFreq = stringTunings[row];
+					double edoSteps = inputVal.getEdoSteps().getAsInt();
+					
+					double freq = baseFreq*Math.pow(2.0, edoSteps/41.0);
+					
+					double n = (12 * Math.log(freq/440)/Math.log(2) + 69);
+					int midiNote = (int) Math.round(n);
+					double semitoneOffset = n - midiNote;
+					final double semitoneRange = 2.0;
+					double bendRatio = semitoneOffset/ semitoneRange;
+					int pitchBend = 8192 + (int) (bendRatio*8192);
+					pitchBend = Math.max(0, Math.min(16383, pitchBend));
+					int lsb = pitchBend & 0x7F;
+					int msb = (pitchBend >> 7) & 0x7F;
+					try {
+						ShortMessage pb = new ShortMessage();					
+						pb.setMessage(ShortMessage.PITCH_BEND, channelMappingMap.get(this).get(row).channelNumber, lsb, msb);
+						synth.getReceiver().send(pb, -1);
+						channel.noteOn(midiNote, 100);
+						openMidiNums.put(channel,midiNote);
+				 	} catch (Exception ex) {
+				 		ex.printStackTrace();
+				 	}
+				}
+			}
+		}
+		
+		public TabCanvas(int strings, String name, double[] baseFrequencies) {
 			this.rows = strings;
-			this.name = name;						
+			this.name = name;
+			this.baseFrequencies = baseFrequencies;
+		}
+		
+		public double[] getBaseFrequencies() {
+			return baseFrequencies;
 		}
 				
 		@Override
@@ -1394,8 +1434,9 @@ public class KiteTabSequencer {
 		dialog.setVisible(true);
 	}
 	
-	void processGeneralTabCanvasEvent(int row, InputVal inputVal, double[] stringTunings, TabCanvas canvas,Map<MidiChannel,Integer> activeNoteMap) {
+	void processGeneralTabCanvasEvent(int row, InputVal inputVal, TabCanvas canvas,Map<MidiChannel,Integer> activeNoteMap) {
 		MidiChannel channel = channelMappingMap.get(canvas).get(row).getChannel();
+		double[] stringTunings = canvas.getBaseFrequencies();
 		if (inputVal == null) {
 			if (activeNoteMap.containsKey(channel)) {
 				channel.noteOff(activeNoteMap.get(channel));
