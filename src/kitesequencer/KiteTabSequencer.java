@@ -6,6 +6,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dialog.ModalityType;
 import java.awt.Dimension;
+import java.awt.FlowLayout;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics;
@@ -22,7 +23,6 @@ import java.awt.event.MouseMotionListener;
 import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 import java.io.File;
-import java.lang.reflect.InvocationTargetException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.IntStream;
 
+import javax.sound.midi.Instrument;
 import javax.sound.midi.MidiChannel;
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.ShortMessage;
@@ -56,6 +57,8 @@ import javax.sound.midi.Synthesizer;
 import javax.swing.AbstractAction;
 import javax.swing.ActionMap;
 import javax.swing.Box;
+import javax.swing.DefaultListCellRenderer;
+import javax.swing.DefaultListModel;
 import javax.swing.InputMap;
 import javax.swing.JButton;
 import javax.swing.JColorChooser;
@@ -65,10 +68,13 @@ import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JTextField;
 import javax.swing.KeyStroke;
+import javax.swing.ListCellRenderer;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.xml.parsers.DocumentBuilder;
@@ -210,7 +216,7 @@ public class KiteTabSequencer {
 	
 	void configureCanvasInstrument() {
 		if (selectedCanvas.get() instanceof TabCanvas) {
-			
+			((TabCanvas)selectedCanvas.get()).displayInstrumentDialog();
 		}
 	}
 	
@@ -1207,9 +1213,90 @@ public class KiteTabSequencer {
 				ex.printStackTrace();
 			}
 		}
-		
-		
-		
+				
+		public void displayInstrumentDialog() {
+			JDialog dialog = new JDialog(frame,String.format("Configuring instruments for [%s]",
+					getName()));
+			dialog.setModalityType(ModalityType.APPLICATION_MODAL);
+			JButton loadSoundfontButton = new JButton("Load Soundbank:");
+			JTextField soundbankTextField = new JTextField(20);
+			
+			JList<Instrument> instrumentList = new JList<>();
+			JScrollPane instrumentScrollPane = new JScrollPane(instrumentList,JScrollPane.VERTICAL_SCROLLBAR_ALWAYS, JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+			
+			soundbankTextField.setEditable(false);
+			
+			ListCellRenderer<? super Instrument> originalRenderer = instrumentList.getCellRenderer();
+			
+			instrumentList.setCellRenderer((list,value,index,isSelected,hasFocus) ->{
+				JLabel label = (JLabel) originalRenderer.getListCellRendererComponent(list, value, index, isSelected, hasFocus);
+				label.setText(String.format("%s (bank %d, program %d)",
+						value.getName(),
+						value.getPatch().getBank(),
+						value.getPatch().getProgram()));
+				return label;
+
+			});
+				
+			
+			if (soundfontFile != null) {
+				soundbankTextField.setText(soundfontFile.getName());
+				try {
+					DefaultListModel<Instrument> model = new DefaultListModel<>();
+					model.addAll(Arrays.asList(MidiSystem.getSoundbank(soundfontFile).getInstruments()));					
+					instrumentList.setModel(model);
+				} catch (Exception ex) {
+					ex.printStackTrace();
+				}
+				
+			}
+			
+			loadSoundfontButton.addActionListener(ae -> {
+				JFileChooser chooser = new JFileChooser("sf2");
+				if (soundfontFile != null) {
+					chooser.setSelectedFile(soundfontFile);
+					if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {
+						soundfontFile = chooser.getSelectedFile();
+						soundbankTextField.setText(soundfontFile.getName());
+						try {
+							DefaultListModel<Instrument> model = new DefaultListModel<>();
+							model.addAll(Arrays.asList(MidiSystem.getSoundbank(soundfontFile).getInstruments()));					
+							instrumentList.setModel(model);
+						} catch (Exception ex) {
+							ex.printStackTrace();
+						}
+					}
+				}
+			});
+			
+			JButton loadInstrumentButton = new JButton("Load instrument");
+			loadInstrumentButton.addActionListener(ae ->{
+				Instrument instrument = instrumentList.getSelectedValue();
+				IntStream.range(0,getRowCount()).forEach(row -> {
+					synth.getChannels()[row].programChange(instrument.getPatch().getBank(),instrument.getPatch().getProgram());
+				});
+				//channelMappingMap.get(guitarCanvas).entrySet().forEach(e -> {
+					//e.getValue().getChannel().programChange(
+						//	instruments[guitarInstrument].getPatch().getBank(),
+//							instruments[guitarInstrument].getPatch().getProgram());				
+	//			});
+			});
+			
+			JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEADING));
+			topPanel.add(loadSoundfontButton);
+			topPanel.add(soundbankTextField);
+			 
+			dialog.getContentPane().add(topPanel,BorderLayout.NORTH);
+			dialog.getContentPane().add(instrumentScrollPane,BorderLayout.CENTER);
+			dialog.getContentPane().add(loadInstrumentButton,BorderLayout.SOUTH);
+			
+			dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+			dialog.setLocationRelativeTo(null);
+			dialog.pack();
+			dialog.setVisible(true);	
+		}
+
+
 		public void noteOff(int row) {
 			openNotes.remove(row);
 			processTabCanvasEvent(row,null);
@@ -1407,7 +1494,7 @@ public class KiteTabSequencer {
 				r.run();
 			}			
 		};
-		
+		KeyStroke k_CtrlI = KeyStroke.getKeyStroke("control I");
 		KeyStroke k_ctrlO = KeyStroke.getKeyStroke("control O");
 		KeyStroke k_ctrlS = KeyStroke.getKeyStroke("control S");
 		KeyStroke k_ctrlR = KeyStroke.getKeyStroke("control R");
@@ -1432,7 +1519,7 @@ public class KiteTabSequencer {
 		KeyStroke k_Period = KeyStroke.getKeyStroke("PERIOD");
 		KeyStroke k_Comma= KeyStroke.getKeyStroke("COMMA");
 		
-		KeyStroke k_CtrlI = KeyStroke.getKeyStroke("control I");
+
 		
 		inputMap.put(k_CtrlI, "configureCanvasInstrument");
 		actionMap.put("configureCanvasInstrument",rToA.apply(()->this.configureCanvasInstrument()));
@@ -1626,54 +1713,17 @@ public class KiteTabSequencer {
 		load.addActionListener(ae -> {
 			TempoEvent tempo = new TempoEvent((int) tempoSpinner.getValue());
 			eventCanvas.setSelectedValue(tempo);
+			eventCanvas.repaint();
 			dialog.dispose();
 		});
 		dialog.getContentPane().add(outerBox,BorderLayout.CENTER);
 		dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
-		dialog.setLocation(MouseInfo.getPointerInfo().getLocation());
+		dialog.setLocationRelativeTo(null);
+		
 		dialog.pack();
 		dialog.setVisible(true);
 	}
-	/*
-	void processGeneralTabCanvasEvent(int row, InputVal inputVal, TabCanvas canvas,Map<MidiChannel,Integer> activeNoteMap) {
-		MidiChannel channel = channelMappingMap.get(canvas).get(row).getChannel();
-		double[] stringTunings = canvas.getBaseFrequencies();
-		if (inputVal == null) {
-			if (activeNoteMap.containsKey(channel)) {
-				channel.noteOff(activeNoteMap.get(channel));
-				activeNoteMap.remove(channel);
-			}			
-		}
-		else {
-			if (inputVal.getEdoSteps().isPresent()) {
-				
-				double baseFreq = stringTunings[row];
-				double edoSteps = inputVal.getEdoSteps().getAsInt();
-				
-				double freq = baseFreq*Math.pow(2.0, edoSteps/41.0);
-				
-				double n = (12 * Math.log(freq/440)/Math.log(2) + 69);
-				int midiNote = (int) Math.round(n);
-				double semitoneOffset = n - midiNote;
-				final double semitoneRange = 2.0;
-				double bendRatio = semitoneOffset/ semitoneRange;
-				int pitchBend = 8192 + (int) (bendRatio*8192);
-				pitchBend = Math.max(0, Math.min(16383, pitchBend));
-				int lsb = pitchBend & 0x7F;
-				int msb = (pitchBend >> 7) & 0x7F;
-				try {
-					ShortMessage pb = new ShortMessage();					
-					pb.setMessage(ShortMessage.PITCH_BEND, channelMappingMap.get(canvas).get(row).channelNumber, lsb, msb);
-					synth.getReceiver().send(pb, -1);
-					channel.noteOn(midiNote, 100);
-					activeNoteMap.put(channel,midiNote);
-			 	} catch (Exception ex) {
-			 		ex.printStackTrace();
-			 	}
-			}
-		}
-	}
-	*/
+	
 	void addTimeSignature() {
 		if (selectedCanvas.get() != eventCanvas) {
 			return;
