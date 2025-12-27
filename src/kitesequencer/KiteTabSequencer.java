@@ -105,7 +105,7 @@ public class KiteTabSequencer {
 	}
 	private static KiteTabSequencer instance;
 	
-	private Font font = new Font("Monospaced",Font.BOLD,14);
+	private Font font = new Font("Monospaced",Font.BOLD,11);
 	private FontMetrics fontMetrics = new Canvas().getFontMetrics(font);
 	
 	int cellWidth = fontMetrics.stringWidth("88")+3;
@@ -1465,9 +1465,6 @@ public class KiteTabSequencer {
 	
 	
 	void createGui() {
-															
-		Font font = new Font("Monospaced",Font.BOLD,14);
-		FontMetrics fontMetrics = new Canvas().getFontMetrics(font);				
 
 		JPanel panel = new JPanel();
 		InputMap inputMap = panel.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
@@ -1940,6 +1937,8 @@ public class KiteTabSequencer {
 				});
 			}
 		}
+		updateMeasureLinePositions();
+		
 		repaintCanvases();
 	
 	}
