@@ -29,6 +29,7 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -77,6 +78,7 @@ import javax.swing.KeyStroke;
 import javax.swing.ListCellRenderer;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.transform.OutputKeys;
@@ -169,20 +171,22 @@ public class KiteTabSequencer {
 				continue;
 			}
 			else {
-				int t = playT.getAndUpdate(i->i+1==repeatT.get()?stopT0.get():i+1);
+				int t = playT.get();
 				try {
 					midiDaemon.execute(() -> {
 						allCanvases.forEach(a->a.handleEvents(t));	
 					});
-					SwingUtilities.invokeLater(() -> {
-						frame.repaint();
-						//allCanvases.forEach(a->a.repaint());
+					
+					SwingUtilities.invokeLater(() -> {						
+						frame.repaint();							
 					});
+						
 				} catch (Exception e) {					
 					e.printStackTrace();
 				}
 				
-				long bpm = tempo.get();
+				playT.getAndUpdate(i->i+1==repeatT.get()?stopT0.get():i+1);
+				long bpm = tempo.get();				
 				Duration sixteenth = Duration.ofMinutes(1).dividedBy(bpm).dividedBy(4);  
 				playbackDaemon.schedule(()->playbackDaemonFunction(),
 						sixteenth.toMillis(),TimeUnit.MILLISECONDS);
@@ -340,6 +344,10 @@ public class KiteTabSequencer {
 	
 	void stopPlayback() {		
 		isPlaying.set(false);
+		Arrays.asList(acousticCanvas,guitarCanvas,bassCanvas).forEach(canvas ->  
+			Arrays.asList(canvas.synth.getChannels())
+			.forEach(a->a.allSoundOff()));
+		
 		repaintCanvases();
 		playStatusPanel.setPlayStatus(PlayStatus.STOP);
 		playStatusPanel.repaint();	
@@ -1125,7 +1133,7 @@ public class KiteTabSequencer {
 		private final Map<MidiChannel,Integer> openMidiNums = new ConcurrentHashMap<>();
 		
 		Synthesizer synth = null;
-		private File soundfontFile;
+		private File soundfontFile = defaultSoundfontFile;
 		private final AtomicReference<Instrument> loadedInstrument = new AtomicReference<>(null);
 		
 		public TabCanvas(int strings, String name, double[] baseFrequencies) {
@@ -1134,6 +1142,10 @@ public class KiteTabSequencer {
 			this.name = name;
 			this.baseFrequencies = baseFrequencies;
 			
+		}
+		
+		public Synthesizer getSynth() {
+			return synth;
 		}
 				
 		public void displayInstrumentDialog() {
@@ -1162,7 +1174,25 @@ public class KiteTabSequencer {
 				return label;
 
 			});
+			
+			loadSoundfontButton.addActionListener(ae -> {
+				JFileChooser chooser = new JFileChooser("sf2");
+				chooser.setFileFilter(new FileNameExtensionFilter("Soundfont files (.sf2)","sf2"));
+				if (chooser.showOpenDialog(frame) == JFileChooser.APPROVE_OPTION) {					
+					soundfontFile = chooser.getSelectedFile();
+					soundbankTextField.setText(soundfontFile.getName());
+					try {
+						DefaultListModel<Instrument> model = new DefaultListModel<>();
+						model.addAll(Arrays.asList(MidiSystem.getSoundbank(soundfontFile).getInstruments()));					
+						instrumentList.setModel(model);						
+					} catch (Exception ex) {
+						ex.printStackTrace();
+					}				
+				}
+			});
 				
+			
+			//loadSoundfontButton.doClick();
 			
 			if (soundfontFile != null) {
 				soundbankTextField.setText(soundfontFile.getName());
@@ -1204,12 +1234,15 @@ public class KiteTabSequencer {
 			
 			JButton loadInstrumentButton = new JButton("Load instrument");
 			loadInstrumentButton.addActionListener(ae ->{
+				
 				Instrument instrument = instrumentList.getSelectedValue();
 				loadedInstrument.set(instrument);
+				initializeMidi(soundfontFile,instrument.getPatch().getBank(),instrument.getPatch().getProgram());
 				
-				IntStream.range(0,getRowCount()).forEach(row -> {
-					synth.getChannels()[row].programChange(instrument.getPatch().getBank(),instrument.getPatch().getProgram());
-				});
+				
+				//IntStream.range(0,getRowCount()).forEach(row -> {
+//					synth.getChannels()[row].programChange(instrument.getPatch().getBank(),instrument.getPatch().getProgram());
+				//});
 				repaint();
 			});
 			
@@ -1350,19 +1383,25 @@ public class KiteTabSequencer {
 		@Override
 		public void initializeMidi(File file, int bank, int program) {
 			try {
-				synth = MidiSystem.getSynthesizer();
-				synth.open();
-				if (file != null) {
-					Soundbank soundbank = MidiSystem.getSoundbank(file);
+				this.soundfontFile = file;
+				if (synth == null) {
+					synth = MidiSystem.getSynthesizer();
+				} 
+				if (!synth.isOpen()) {
+					synth.open();
+				}
+				if (this.soundfontFile != null) {
+					Soundbank soundbank = MidiSystem.getSoundbank(soundfontFile);
 					synth.unloadAllInstruments(synth.getDefaultSoundbank());
-					synth.loadAllInstruments(soundbank);
-					Stream.of(synth.getLoadedInstruments()).filter(a->
+					Stream.of(soundbank.getInstruments()).filter(a->
 						a.getPatch().getBank() == bank && a.getPatch().getProgram() == program)
-					.findFirst().ifPresent(loadedInstrument::set);					
+					.findFirst().ifPresent(instrument -> {
+						loadedInstrument.set(instrument);
+						synth.loadInstrument(instrument);
+					});				
 				}
 				
-				for (int row = 0; row < getRowCount(); row++) {
-					
+				for (int row = 0; row < getRowCount(); row++) {				
 					synth.getChannels()[row].programChange(bank,program);
 				}
 				
@@ -1376,7 +1415,7 @@ public class KiteTabSequencer {
 	
 	interface SoundfontPlayer {
 		public void initializeMidi(File file, int bank, int program);
-			
+		public Synthesizer getSynth();
 		
 	}
 	
@@ -1387,6 +1426,9 @@ public class KiteTabSequencer {
 		private File soundfontFile = null;
 		private final AtomicReference<Instrument> loadedInstrument = new AtomicReference<>(null);
 		
+		public Synthesizer getSynth() {
+			return synth;
+		}
 		public DrumTabCanvas() {
 			initializeMidi(defaultSoundfontFile,0,0);
 		}
@@ -1400,11 +1442,14 @@ public class KiteTabSequencer {
 					Soundbank soundbank = MidiSystem.getSoundbank(file);
 					synth.unloadAllInstruments(synth.getDefaultSoundbank());
 					synth.loadAllInstruments(soundbank);
-					Stream.of(synth.getLoadedInstruments()).filter(a->
+					Stream.of(soundbank.getInstruments()).filter(a->
 					a.getPatch().getBank() == bank && a.getPatch().getProgram() == program)
-				.findFirst().ifPresent(loadedInstrument::set);
+					.findFirst().ifPresent(instrument -> {
+						synth.loadInstrument(instrument);
+						synth.getChannels()[9].programChange(bank, program);
+					});
 				}
-				synth.getChannels()[9].programChange(bank, program);
+					
 			} catch (Exception ex) {
 				ex.printStackTrace();
 			}
@@ -2023,7 +2068,10 @@ public class KiteTabSequencer {
 	}
 	
 	void loadSoundfonts() {
-		File file = new File("config/defaultSoundfonts.xml");
+		
+		File file = Stream.of("etc/","config/")
+				.map(a->new File(a+"defaultSoundfonts.xml"))
+				.filter(a->a.exists()).findFirst().get();
 		try {
 			DocumentBuilderFactory dbf = DocumentBuilderFactory.newDefaultInstance();
 			DocumentBuilder db = dbf.newDocumentBuilder();
